@@ -24,14 +24,19 @@
 #define WATER_FLOW_PIN 15
 #define PUMP_PIN 33
 #define POT_PIN 32
+#define ULTRA_TRIG 32
+#define ULTRA_ECHO 25
 
 
-// Available items
+// available items
+// controls
 #define SWITCH1 "switch_01"
 #define SWITCH2 "switch_02"
+#define PUMP_SPEED "pump_speed"
+// sensors
 #define WATER "water_level"
 #define WATER_FLOW "water_flow"
-#define PUMP "pump"
+#define TANK_PERCENTAGE "tank_percentage"
 
 
 // Wi-fi
@@ -45,13 +50,17 @@ unsigned long timer = 0;
 volatile byte numPulses = 0;
 float flowRate = 0.0;
 
-int sensorValue = 0;
+// pump speed setting (analog out for the MOSFET)
+float oldPumpSpeed = 0; // set on change only
+float pumpSpeed = 0;
 
 
 WebServer server(80);
 TFT_eSPI tft = TFT_eSPI();
 
-const int led = 13;
+
+// ================ READS ================ //
+
 
 bool readPin(int PIN) {
   return digitalRead(PIN);
@@ -59,15 +68,6 @@ bool readPin(int PIN) {
 
 String getUuid() {
   return String((int) ESP.getEfuseMac(), HEX);
-}
-
-
-void toggleSwitch(int PIN) {
-  if (readPin(PIN)) {
-    digitalWrite(PIN, LOW);
-  } else {
-    digitalWrite(PIN, HIGH);
-  }
 }
 
 float getWaterFlow() {
@@ -86,16 +86,87 @@ float getWaterFlow() {
   return flowRate;
 }
 
+float getTankPercentage() {
+  float totalHeight = 52; // cm
+  digitalWrite(ULTRA_TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(ULTRA_TRIG, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(ULTRA_TRIG, LOW);
+  // pulse length [us]
+  float odezva = pulseIn(ULTRA_ECHO, HIGH);
+  // cm
+  float actualHeight = odezva / 58.31;
+  return (1 - (actualHeight / totalHeight)) * 100;
+}
+
+// ================ WRITES ================ //
+
+void toggleSwitch(int PIN) {
+  if (readPin(PIN)) {
+    digitalWrite(PIN, LOW);
+  } else {
+    digitalWrite(PIN, HIGH);
+  }
+}
+
+void setPumpSpeed(float newSpeed) {
+  pumpSpeed = newSpeed;
+}
+
+
+// ================ SERVER HANDLES ================ //
 
 void handleStatus() {
   JSONVar response;
   response["status"] = "ok";
-  response["temp"] = 15;
   response["uuid"] = getUuid();
-  response[SWITCH1] = readPin(RELE_01);
-  response[SWITCH2] = readPin(RELE_02);
-  response[WATER] = readPin(WATER_PIN);
-  response[WATER_FLOW] = getWaterFlow();
+
+  // sensors
+  JSONVar temp;
+  temp["value"] = 15;
+  temp["type"] = "sensor";
+  temp["unit"] = "°C";
+  response["temp"] = JSON.stringify(temp);
+
+  JSONVar waterLevel;
+  waterLevel["value"] = readPin(WATER_PIN) ? "false" : "true";
+  waterLevel["type"] = "sensor";
+  temp["unit"] = "bool";
+  response[WATER] = JSON.stringify(waterLevel);
+
+  JSONVar waterLevelPerc;
+  waterLevelPerc["value"] = getTankPercentage();
+  waterLevelPerc["type"] = "sensor";
+  temp["unit"] = "float";
+  response[TANK_PERCENTAGE] = JSON.stringify(waterLevelPerc);
+
+  JSONVar waterFlow;
+  waterFlow["value"] = getWaterFlow();
+  waterFlow["type"] = "sensor";
+  waterFlow["unit"] = "l/min";
+  response[WATER_FLOW] = JSON.stringify(waterFlow);
+
+  // controls
+  JSONVar sw1;
+  sw1["value"] = readPin(RELE_01) ? "false" : "true";
+  sw1["type"] = "control";
+  sw1["input"] = "bool";
+  response[SWITCH1] = JSON.stringify(sw1);
+
+  JSONVar sw2;
+  sw2["value"] = readPin(RELE_02) ? "false" : "true";
+  sw2["type"] = "control";
+  sw2["input"] = "bool";
+  response[SWITCH2] = JSON.stringify(sw2);
+
+  JSONVar pump;
+  pump["value"] = pumpSpeed;
+  pump["type"] = "control";
+  pump["input"] = "float";
+  response[PUMP_SPEED] = JSON.stringify(pump);
+  
+  
   server.send(200, "application/json", JSON.stringify(response));
 }
 
@@ -123,17 +194,42 @@ void handleAction() {
   JSONVar response;
   if (request == "info") {
     response["uuid"]= getUuid();
+    
+  // ACTION
   } else if (request == action + SWITCH1) {
     toggleSwitch(RELE_01);
-    response[SWITCH1] = readPin(RELE_01);
+    response["value"] = readPin(RELE_01) ? "false" : "true";
+    
   } else if (request == action + SWITCH2) {
     toggleSwitch(RELE_02);
-    response[SWITCH2] = readPin(RELE_02);
+    response["value"] = readPin(RELE_02) ? "false" : "true";
+    
+  } else if (request == action + PUMP_SPEED) {
+    if (!myObject.hasOwnProperty("value")) {
+      handleError("Value property needed.");
+      return;
+    }
+    float newSpeed = JSON.stringify(myObject["value"]).toFloat();
+    if (newSpeed < 0 || newSpeed > 1) {
+      handleError("Value represents %, it needs to be between 0-1.");
+      return;
+    }
+    setPumpSpeed(newSpeed);
+    response["value"] = newSpeed;
+
+  // READ
+  } else if (request == read_prefix + SWITCH1) {
+    response["value"] = readPin(RELE_01) ? "false" : "true";
+
+  } else if (request == read_prefix + SWITCH2) {
+    response["value"] = readPin(RELE_02) ? "false" : "true";
+  
   } else if (request == read_prefix + WATER) {
-    toggleSwitch(RELE_02);
-    response[WATER] = readPin(WATER_PIN);
+    response["value"] = readPin(WATER_PIN) ? "false" : "true";
+    
   } else if (request == read_prefix + WATER_FLOW) {
-    response[WATER_FLOW] = getWaterFlow();
+    response["value"] = getWaterFlow();
+    
   } else {
     handleError("UNKNOWN_CMD " + request);
     return;
@@ -219,8 +315,10 @@ void setup(void) {
 //    tft.println("NOT REGISTRED");
 //    tft.setTextColor(TFT_WHITE, TFT_BLACK);
 //  }
-
+  pinMode(ULTRA_TRIG, OUTPUT);
+  pinMode(ULTRA_ECHO, INPUT);
   pinMode(RELE_01, OUTPUT);
+  pinMode(RELE_02, OUTPUT);
   pinMode(WATER_PIN, INPUT);
   pinMode(WATER_FLOW_PIN, INPUT_PULLUP);
   attachInterrupt(WATER_FLOW_PIN, addPulse, FALLING);
@@ -241,6 +339,11 @@ void setup(void) {
   // #END - SETUP
 }
 
+float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) {
+   float x = (value - fromLow) / (fromHigh - fromLow);
+   return toLow + (x * (toHigh - toLow));
+}
+
 void addPulse() {
   numPulses++;
 }
@@ -248,7 +351,7 @@ void addPulse() {
 void loop(void) {
   server.handleClient();
 
-//  printTft();
+  //  printTft();
   float oldFlowRate = flowRate;
   float flow = getWaterFlow();
   if (oldFlowRate != flow) {
@@ -262,14 +365,16 @@ void loop(void) {
     tft.println(getWaterFlow());
   }
 
-  int oldVal = sensorValue;
-  sensorValue = map(analogRead(POT_PIN), 0, 4095, 13, 18);
-  if (oldVal != sensorValue) {
+  if (oldPumpSpeed != pumpSpeed) {
     tft.fillRect(95, 98, 40, 20, GREEN);
     tft.setCursor(100, 105);
     tft.setTextColor(BLACK, GREEN);
-    tft.println(sensorValue);
-    ledcWrite(1, sensorValue); // write red component to channel 1, etc.
+    tft.print(pumpSpeed * 100);
+    tft.print(" %");
+    float mappedSpeed = mapFloat(pumpSpeed, 0, 1, 14.5, 20);
+    tft.print(" ("); tft.print(mappedSpeed); tft.println(")");
+    ledcWrite(1, mapFloat(pumpSpeed, 0, 1, 14.5, 20));
+    oldPumpSpeed = pumpSpeed;
   }
   delay(50);
 
