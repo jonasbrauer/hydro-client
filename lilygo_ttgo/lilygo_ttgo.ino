@@ -96,7 +96,7 @@ float getTankPercentage() {
   // pulse length [us]
   float odezva = pulseIn(ULTRA_ECHO, HIGH);
   // cm
-  float actualHeight = odezva / 58.31;
+  float actualHeight = odezva / 52.00;
   return (1 - (actualHeight / totalHeight)) * 100;
 }
 

@@ -6,13 +6,6 @@
 #define BUS_PIN 25
 #define ADR_SIZE 8 //byte
 
-//vytvoreni instanci
-OneWire Bus(BUS_PIN);
-DallasTemperature Sensors(&Bus);
-DeviceAddress DevAdr;
-
-uint8_t nSensors = 0;
-
 
 #define PLOVAK 12
 #define LED_G 0

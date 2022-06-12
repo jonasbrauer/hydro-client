@@ -3,6 +3,7 @@
 
 #include "configuration.h"
 
+#include <Arduino_JSON.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
@@ -13,76 +14,69 @@
 #define BUS_PIN 25
 #define ADR_SIZE 8 //byte
 
-//vytvoreni instanci
+// variables
 OneWire Bus(BUS_PIN);
 DallasTemperature Sensors(&Bus);
 DeviceAddress DevAdr;
+DHT tempSensor(pinDHT, typDHT11);
 
 uint8_t nSensors = 0;
 
 
-#define PLOVAK 12
-#define LED_G 0
-#define LED_R 0
-#define LED_B 0
-#define RELE_01 17
-#define RELE_02 13
-#define RELE_03 15
-#define RELE_04 2
+String handleError(String msg) {
+  JSONVar message;
+  message["status"] = "error";
+  message["cause"] = msg;
+  return JSON.stringify(message);
+}
 
-#define pinDHT 26
-#define typDHT11 DHT11     // or DHT22
+String handleStatus() {
+  JSONVar response;
+  response["status"] = "ok";
+  response["temp"] = 15;
+  response["uuid"] = getUuid();
+  response[SWITCH1] = readPin(RELE_01);
+  response[SWITCH2] = readPin(RELE_02);;
+  return JSON.stringify(response);
+}
 
-#define BAUD 19200
+String handleAction(String body) {
+  JSONVar myObject = JSON.parse(body);
 
-// Available sensors/controls
-#define A_TEMP "temp"
-#define A_HUM "hum"
-#define W_TEMP "water_temp"
-#define W_LEVEL "water_level"
-#define SWITCH1 "switch_01"
-#define SWITCH2 "switch_02"
-#define SWITCH3 "switch_03"
-#define SWITCH4 "switch_04"
-#define BLINK "blink"
+  if (JSON.typeof(myObject) == "undefined") {
+    return handleError("Parsing JSON failed."); 
+  }
+  if (!myObject.hasOwnProperty("request")) {
+    return handleError("JSON needs to have exactly one keyword <request>");
+  }
 
-// variables
-DHT tempSensor(pinDHT, typDHT11);
+  String read_prefix = "read_";
+  String action = "action_";
+  String request = (const char*) myObject["request"];
+  if (request == "status") {
+     return handleStatus();
+  }
 
+  JSONVar response;
+  if (request == "info") {
+    response["uuid"]= getUuid();
+  } else if (request == action + SWITCH1) {
+    toggleSwitch(RELE_01);
+    response[SWITCH1] = readPin(RELE_01);
+  } else if (request == action + SWITCH2) {
+    toggleSwitch(RELE_02);
+    response[SWITCH2] = readPin(RELE_02);
+  } else {
+    return handleError("UNKNOWN_CMD " + request);
+  }
+  response["status"] = "ok";
+  return JSON.stringify(response);
+}
 
 void setup() {
-  pinMode(pinDHT, INPUT);
-  pinMode(LED_G, OUTPUT);
-  pinMode(LED_R, OUTPUT);
-  pinMode(RELE_01, OUTPUT);
-  pinMode(RELE_02, OUTPUT);
-  pinMode(RELE_03, OUTPUT);
-  pinMode(RELE_04, OUTPUT);
-  pinMode(PLOVAK, INPUT);
-
-  pinMode(37, OUTPUT);
-  pinMode(38, OUTPUT);
-  pinMode(39, OUTPUT);
-  pinMode(32, OUTPUT);
-  pinMode(33, OUTPUT);
-  pinMode(25, OUTPUT);
-  pinMode(26, OUTPUT);
-  pinMode(27, OUTPUT);
-  pinMode(17, OUTPUT);
 
   Serial.begin(BAUD);
-  tempSensor.begin();
 
-  Sensors.begin();
-  nSensors = Sensors.getDeviceCount();
-
-  delay(1000);
-  //vypis poctu senzoru
-  Serial.print("Pocet senzoru: ");
-  Serial.println(nSensors);
-
-  Serial.print("Temp: ");
-  Serial.println(Sensors.getTempCByIndex(0));
 }
 
 // the loop function runs over and over again forever
@@ -90,54 +84,10 @@ void loop() {
 
   if (Serial.available() > 0) {
     String data = Serial.readStringUntil('\n');
-
-    String action = "action_";
-    String READ = "read_";
-
-    if (data == "info") {
-      Serial.print("uuid:");
-      Serial.println(getUuid());
-    } else if (data == "status") {
-      Serial.println(full_status());
-
-    } else if (data == action + SWITCH1) {
-      toggleSwitch(RELE_01);
-      String res = "status:ok,";
-      Serial.println(res + SWITCH1 + ":" + readPin(RELE_01));
-
-    } else if (data == action + SWITCH2) {
-      toggleSwitch(RELE_02);
-      String res = "status:ok,";
-      Serial.println(res + SWITCH2 + ":" + readPin(RELE_02));
-
-    } else if (data == action + SWITCH3) {
-      toggleSwitch(RELE_03);
-      String res = "status:ok,";
-      Serial.println(res + SWITCH3 + ":" + readPin(RELE_03));
-
-    } else if (data == action + SWITCH4) {
-      toggleSwitch(RELE_04);
-      String res = "status:ok,";
-      Serial.println(res + SWITCH4 + ":" + readPin(RELE_04));
-
-    } else if (data == action + BLINK) {
-      ok_blink(LED_G);
-      Serial.println("status:ok");
-
-    } else if (data == READ + "temp") {
-      String res = "status:ok,";
-      res = res + A_TEMP + ":" + read_temp();
-      Serial.println(res);
-
-    } else if (data == READ + "hum") {
-      String res = "status:ok,";
-      res = res + A_HUM + ":" + read_hum();
-      Serial.println(res);
-
-    } else {
-      Serial.println("UNKNOWN");
-    }
+    String response = handleAction(data);
+    Serial.println(response);
   }
+  delay(0.1);
 }
 
 
