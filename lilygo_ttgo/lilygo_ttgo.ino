@@ -1,12 +1,13 @@
 #include <Arduino_JSON.h>
 
+
 // display/fonts
 #include "NotoSansBold15.h"
 #define AA_FONT_SMALL NotoSansBold15
 #define GREEN 0x52B788
 #define BLACK 0x0000
 
-// Hudro-HUB URL
+// Hydro-HUB URL
 #define HUB "http://www.hydroserver.home/rest/devices/register"
 
 #include <SPI.h>
@@ -15,6 +16,10 @@
 #include <WiFiClient.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
+#include "DHT.h"
+
+
+#define typeDHT DHT11
 
 
 // Available physical pins
@@ -26,6 +31,7 @@
 #define POT_PIN 32
 #define ULTRA_TRIG 32
 #define ULTRA_ECHO 25
+#define pinDHT 13
 
 
 // available items
@@ -57,6 +63,7 @@ float pumpSpeed = 0;
 
 WebServer server(80);
 TFT_eSPI tft = TFT_eSPI();
+DHT dht(pinDHT, typeDHT);
 
 
 // ================ READS ================ //
@@ -72,13 +79,12 @@ String getUuid() {
 
 float getWaterFlow() {
   if ((millis() - timer) > 1000) {
-    // vypnutí detekce přerušení po dobu výpočtu a tisku výsledku
+    // Detach while we make the calculation
     detachInterrupt(WATER_FLOW_PIN);
-    // výpočet průtoku podle počtu pulzů za daný čas
-    // se započtením kalibrační konstanty
+    // Calculate the flow using the calibration constant
     flowRate = ((1000.0 / (millis() - timer)) * numPulses) / calibration;
 
-    // nulování počítadla pulzů
+    // reset
     numPulses = 0;
     timer = millis();
     attachInterrupt(WATER_FLOW_PIN, addPulse, FALLING);
@@ -98,6 +104,14 @@ float getTankPercentage() {
   // cm
   float actualHeight = odezva / 52.00;
   return (1 - (actualHeight / totalHeight)) * 100;
+}
+
+float getTemperature() {
+  return dht.readTemperature();
+}
+
+float getHumidity() {
+  return dht.readHumidity();
 }
 
 // ================ WRITES ================ //
@@ -124,10 +138,16 @@ void handleStatus() {
 
   // sensors
   JSONVar temp;
-  temp["value"] = 15;
+  temp["value"] = getTemperature();
   temp["type"] = "sensor";
   temp["unit"] = "°C";
   response["temp"] = JSON.stringify(temp);
+
+  JSONVar hum;
+  hum["value"] = getHumidity();
+  hum["type"] = "sensor";
+  hum["unit"] = "%";
+  response["hum"] = JSON.stringify(hum);
 
   JSONVar waterLevel;
   waterLevel["value"] = readPin(WATER_PIN) ? "false" : "true";
@@ -165,8 +185,8 @@ void handleStatus() {
   pump["type"] = "control";
   pump["input"] = "float";
   response[PUMP_SPEED] = JSON.stringify(pump);
-  
-  
+
+
   server.send(200, "application/json", JSON.stringify(response));
 }
 
@@ -187,23 +207,23 @@ void handleAction() {
   String action = "action_";
   String request = (const char*) myObject["request"];
   if (request == "status") {
-     handleStatus();
-     return;
+    handleStatus();
+    return;
   }
 
   JSONVar response;
   if (request == "info") {
-    response["uuid"]= getUuid();
-    
-  // ACTION
+    response["uuid"] = getUuid();
+
+    // ACTION
   } else if (request == action + SWITCH1) {
     toggleSwitch(RELE_01);
     response["value"] = readPin(RELE_01) ? "false" : "true";
-    
+
   } else if (request == action + SWITCH2) {
     toggleSwitch(RELE_02);
     response["value"] = readPin(RELE_02) ? "false" : "true";
-    
+
   } else if (request == action + PUMP_SPEED) {
     if (!myObject.hasOwnProperty("value")) {
       handleError("Value property needed.");
@@ -217,19 +237,19 @@ void handleAction() {
     setPumpSpeed(newSpeed);
     response["value"] = newSpeed;
 
-  // READ
+    // READ
   } else if (request == read_prefix + SWITCH1) {
     response["value"] = readPin(RELE_01) ? "false" : "true";
 
   } else if (request == read_prefix + SWITCH2) {
     response["value"] = readPin(RELE_02) ? "false" : "true";
-  
+
   } else if (request == read_prefix + WATER) {
     response["value"] = readPin(WATER_PIN) ? "false" : "true";
-    
+
   } else if (request == read_prefix + WATER_FLOW) {
     response["value"] = getWaterFlow();
-    
+
   } else {
     handleError("UNKNOWN_CMD " + request);
     return;
@@ -292,29 +312,26 @@ void setup(void) {
   //server.onNotFound(handleNotFound);
   server.begin();
 
-  tft.println();
-  tft.println("HTTP started");
-
   // register this device to the hub
-//  HTTPClient http;
-//  http.begin(HUB);
-//  String httpData = "{\"url\":\"http://";
-//  httpData += WiFi.localIP().toString();
-//  httpData += "\"}";
-//  http.addHeader("Content-Type", "application/json");
-//
-//  tft.println(httpData);
-//  int responseCode = http.POST(httpData);
-//  tft.println(responseCode);
-//  if (responseCode > 0) {
-//    tft.setTextColor(GREEN, TFT_BLACK);
-//    tft.println("REGISTRED");
-//    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//  } else {
-//    tft.setTextColor(TFT_RED, TFT_BLACK);
-//    tft.println("NOT REGISTRED");
-//    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//  }
+  //  HTTPClient http;
+  //  http.begin(HUB);
+  //  String httpData = "{\"url\":\"http://";
+  //  httpData += WiFi.localIP().toString();
+  //  httpData += "\"}";
+  //  http.addHeader("Content-Type", "application/json");
+  //
+  //  tft.println(httpData);
+  //  int responseCode = http.POST(httpData);
+  //  tft.println(responseCode);
+  //  if (responseCode > 0) {
+  //    tft.setTextColor(GREEN, TFT_BLACK);
+  //    tft.println("REGISTRED");
+  //    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  //  } else {
+  //    tft.setTextColor(TFT_RED, TFT_BLACK);
+  //    tft.println("NOT REGISTRED");
+  //    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  //  }
   pinMode(ULTRA_TRIG, OUTPUT);
   pinMode(ULTRA_ECHO, INPUT);
   pinMode(RELE_01, OUTPUT);
@@ -326,6 +343,8 @@ void setup(void) {
   ledcAttachPin(PUMP_PIN, 1);
   ledcSetup(1, 12000, 8);
   Serial.begin(9600);
+
+  dht.begin();
 
   delay(1000);
 
@@ -340,8 +359,8 @@ void setup(void) {
 }
 
 float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) {
-   float x = (value - fromLow) / (fromHigh - fromLow);
-   return toLow + (x * (toHigh - toLow));
+  float x = (value - fromLow) / (fromHigh - fromLow);
+  return toLow + (x * (toHigh - toLow));
 }
 
 void addPulse() {
@@ -366,17 +385,17 @@ void loop(void) {
   }
 
   if (oldPumpSpeed != pumpSpeed) {
-    tft.fillRect(95, 98, 40, 20, GREEN);
+    tft.fillRect(95, 98, 80, 20, GREEN);
     tft.setCursor(100, 105);
     tft.setTextColor(BLACK, GREEN);
     tft.print(pumpSpeed * 100);
     tft.print(" %");
-    float mappedSpeed = mapFloat(pumpSpeed, 0, 1, 14.5, 20);
+//    float mappedSpeed = mapFloat(pumpSpeed, 0, 1, 14.5, 20);
+    float mappedSpeed = mapFloat(pumpSpeed, 0, 1, 0, 255);
     tft.print(" ("); tft.print(mappedSpeed); tft.println(")");
-    ledcWrite(1, mapFloat(pumpSpeed, 0, 1, 14.5, 20));
+    ledcWrite(1, mappedSpeed);
     oldPumpSpeed = pumpSpeed;
   }
   delay(50);
-
 
 }
